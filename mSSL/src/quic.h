@@ -11,6 +11,9 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <algorithm>
+#include <random>
+#include <vector>
 #include <RcppArmadillo.h>
 
 #define EPS (double(2.22E-16))
@@ -40,26 +43,19 @@ typedef struct
 	int j;
 } ushort_pair_t;
 
-int IsDiag(int q, arma::mat &A)
+int IsDiag(int q, const arma::mat &A)
 {
-	int flag = 0;
 	for (int k = 0, i = 0; i < q; i++, k += q)
 	{
 		for (int j = 0; j < i; j++)
 		{
 			if (A(k + j) != 0.0)
 			{
-				flag = 0;
-				;
-			}
-			else
-			{
-				flag = 1;
-				;
+				return 0;
 			}
 		}
 	}
-	return flag;
+	return 1;
 }
 
 
@@ -260,14 +256,13 @@ double projLogDet(int q, const arma::mat &S,
 }
 
 
-cube my_quic(const int &q, 
-const arma::mat &S, const arma::mat &Rho, 
-const double &tol, 
-int &max_iter_quic)
+cube my_quic(const int &q,
+const arma::mat &S, const arma::mat &Rho,
+const double &tol,
+int &max_iter_quic,
+const arma::mat &Omega_init,
+const arma::mat &Sigma_init)
 {
-	srand(1);
-    
-
 	int maxNewtonIter = max_iter_quic;
 	double cdSweepTol = 0.05;
 	int max_lineiter = 20;
@@ -275,16 +270,17 @@ int &max_iter_quic)
 	double fX1 = 1e+15;
 	double fXprev = 1e+15;
 	double sigma = 0.001;
-	bool info;
 
-	arma::mat Omega(q, q, fill::eye);
-	arma::mat Sigma(q, q, fill::eye);
+	arma::mat Omega = (Omega_init.n_rows == static_cast<uword>(q) &&
+		Omega_init.n_cols == static_cast<uword>(q)) ? Omega_init : arma::eye(q, q);
+	arma::mat Sigma = (Sigma_init.n_rows == static_cast<uword>(q) &&
+		Sigma_init.n_cols == static_cast<uword>(q)) ? Sigma_init : arma::eye(q, q);
 
 	arma::mat D(q, q, fill::zeros);
 	arma::mat U(q, q, fill::zeros);
 
-
-	ushort_pair_t *activeSet = (ushort_pair_t *)malloc(q * (q + 1) / 2 * sizeof(ushort_pair_t));
+	std::vector<ushort_pair_t> activeSet(q * (q + 1) / 2);
+	static std::mt19937 rng(1);
 
 	double l1normX = 0.0;
 	double trSX = 0.0;
@@ -361,16 +357,7 @@ int &max_iter_quic)
 			for (int cdSweep = 1; cdSweep <= 1 + NewtonIter / 3; cdSweep++)
 			{
 				diffD = 0.0;
-				for (int i = 0; i < numActive; i++)
-				{
-					int j = i + rand() % (numActive - i);
-					int k1 = activeSet[i].i;
-					int k2 = activeSet[i].j;
-					activeSet[i].i = activeSet[j].i;
-					activeSet[i].j = activeSet[j].j;
-					activeSet[j].i = k1;
-					activeSet[j].j = k2;
-				}
+				std::shuffle(activeSet.begin(), activeSet.begin() + numActive, rng);
 				for (int l = 0; l < numActive; l++)
 				{
 					int i = activeSet[l].i;
@@ -385,22 +372,11 @@ int &max_iter_quic)
 		{
 			//ptrdiff_t info = 0;
 			//ptrdiff_t p0 = q;
-			
-			int p0 = q;
+
 			U = Omega;
-			
-			//dpotrf_((char *)"U", &p0, U, &p0, &info);
-			chol(U,U);
-			
-			if (U.n_rows == 0)
+			if (!chol(U, U))
 			{
-				// lack of positive definiteness
-				//iter = -1;
-				free(activeSet);
-				U = Omega; 
-				//free(U);
-				//free(D);
-				//return;
+				Rcpp::stop("my_quic: current Omega is not positive definite");
 			}
 			for (int i = 0, k = 0; i < q; i++, k += (q + 1))
 			{
@@ -465,9 +441,7 @@ int &max_iter_quic)
 			
 			//ptrdiff_t info = 0;
 			//ptrdiff_t p0 = q;
-			int p0 = q;
-			chol(Sigma,Sigma);
-			if (Sigma.n_rows==0)
+			if (!chol(Sigma, Sigma))
 			{
 				alpha *= 0.5;
 				Sigma = Omega;
@@ -514,8 +488,10 @@ int &max_iter_quic)
 		//ptrdiff_t info;
 		//ptrdiff_t p0 = q;
 		//int info = 0;
-		int p0 = q;
-		inv_sympd(Sigma, Omega);
+		if (!inv_sympd(Sigma, Omega))
+		{
+			Rcpp::stop("my_quic: failed to invert Omega");
+		}
 		
 
 		
@@ -536,10 +512,6 @@ int &max_iter_quic)
 	//dGap = gap;
 	//iter = NewtonIter;
 
-	free(activeSet);
-	//free(U);
-	//free(D);
-	
 	cube results(q, q, 2);
 	results.slice(0) = Omega;
 	results.slice(1) = Sigma;
@@ -547,6 +519,16 @@ int &max_iter_quic)
 
 	//double elapsedTime = (clock() - timeBegin)/CLOCKS_PER_SEC;
 	//if(cputime != NULL) cputime = elapsedTime;
+}
+
+cube my_quic(const int &q,
+const arma::mat &S, const arma::mat &Rho,
+const double &tol,
+int &max_iter_quic)
+{
+	arma::mat Omega_init(q, q, fill::eye);
+	arma::mat Sigma_init(q, q, fill::eye);
+	return my_quic(q, S, Rho, tol, max_iter_quic, Omega_init, Sigma_init);
 }
 
 #endif

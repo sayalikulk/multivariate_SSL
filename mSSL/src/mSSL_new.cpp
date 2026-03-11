@@ -229,7 +229,7 @@ List mSSL_dpe(arma::mat X,
     eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
     // M Step Update of Omega
     xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-    res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+    res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
     Omega = res_quic.slice(0);
     Sigma = res_quic.slice(1);
     
@@ -336,7 +336,7 @@ List mSSL_dpe(arma::mat X,
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
       // M Step Update of Omega
       xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       Omega = res_quic.slice(0);
       Sigma = res_quic.slice(1);
       
@@ -445,7 +445,7 @@ List mSSL_dpe(arma::mat X,
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
       // M Step Update of Omega
       xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       Omega = res_quic.slice(0);
       Sigma = res_quic.slice(1);
       
@@ -626,7 +626,7 @@ List mSSL_dpe(arma::mat X,
         eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
         // M Step Update of Omega
         xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-        res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+        res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
         Omega = res_quic.slice(0);
         Sigma = res_quic.slice(1);
         
@@ -882,7 +882,7 @@ List mSSL_dcpe(arma::mat X,
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta -2 + q*(q-1)/2);
       // M-step update of Omega
       xi_star /= n; // QUIC needs everything to be scaled
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       Omega = res_quic.slice(0);
       Sigma = res_quic.slice(1);
       // check convergence
@@ -947,7 +947,7 @@ List mSSL_dcpe(arma::mat X,
     eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta -2 + q*(q-1)/2);
     // M-step update of Omega
     xi_star /= n;
-    res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+    res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
     Omega = res_quic.slice(0);
     Sigma = res_quic.slice(1);
     
@@ -1094,7 +1094,7 @@ List gSSL(arma::mat Y,
       // M Step
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
       xi_star /= n;
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter);
+      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       Omega = res_quic.slice(0);
       Sigma = res_quic.slice(1);
       
