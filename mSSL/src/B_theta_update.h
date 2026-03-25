@@ -195,22 +195,19 @@ void B_coord_desc(const int n, const int p, const int q, arma::mat& B, arma::mat
       }
       // --- Violation scan: check inactive entries for new nonzeros ---
       violations = 0;
-      // Rebuild active set from scratch after violation scan
-      std::vector<std::pair<int,int>> new_active_set;
-      new_active_set.reserve(active_set.size() + p);  // expect some growth
+      // Build a lookup matrix to identify which (j,k) were in the active set,
+      // so the violation scan only processes previously-inactive entries.
+      arma::umat is_active(p, q, arma::fill::zeros);
+      for(size_t a = 0; a < active_set.size(); a++){
+        is_active(active_set[a].first, active_set[a].second) = 1;
+      }
       for(int j = 0; j < p; j++){
         for(int k = 0; k < q; k++){
-          if(B(j,k) != 0){
-            // Already active — keep it
-            new_active_set.push_back({j, k});
-            continue;
-          }
-          // Inactive entry: check for violation
+          if(is_active(j,k) == 1) continue;  // skip active entries
+
+          // OLD: if(e1(j,k) == 0){
+
           w_kk = Omega(k,k);
-
-          // OLD: dense loop with e1 check
-          // if(e1(j,k) == 0){
-
           b_old = B(j,k);
           // OLD: z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
           z = sparse_dot(tXR, j, omega_nz, omega_val, k)/w_kk + n*b_old;
@@ -226,15 +223,23 @@ void B_coord_desc(const int n, const int p, const int q, arma::mat& B, arma::mat
            S(k,k) += tXX(j,j) * b_shift * b_shift/n;
            tXR.col(k) += tXX.col(j) * b_shift;
            // New nonzero — add to active set
-           new_active_set.push_back({j, k});
+           active_set.push_back({j, k});
           }
 
-          // OLD: active set update via e1 matrix
-          // if(B(j,k) != 0) e1(j,k) = 1;
-          // else e1(j,k) = 0;
+          // OLD: if(B(j,k) != 0) e1(j,k) = 1;
+          // OLD: else e1(j,k) = 0;
         }
       }
-      active_set = new_active_set;
+      // Remove entries from active set that were thresholded to zero
+      // during the inner loop (keep old nonzeros + new violations)
+      std::vector<std::pair<int,int>> pruned_active_set;
+      pruned_active_set.reserve(active_set.size());
+      for(size_t a = 0; a < active_set.size(); a++){
+        if(B(active_set[a].first, active_set[a].second) != 0){
+          pruned_active_set.push_back(active_set[a]);
+        }
+      }
+      active_set = pruned_active_set;
       if(violations == 0) break;
     }
   } else{
@@ -296,21 +301,19 @@ void B_coord_desc(const int n, const int p, const int q, arma::mat& B, arma::mat
 
       // --- Violation scan: check inactive entries for new nonzeros ---
       violations = 0;
-      // Rebuild active set from scratch after violation scan
-      std::vector<std::pair<int,int>> new_active_set;
-      new_active_set.reserve(active_set.size() + p);
+      // Build a lookup matrix to identify which (j,k) were in the active set,
+      // so the violation scan only processes previously-inactive entries.
+      arma::umat is_active(p, q, arma::fill::zeros);
+      for(size_t a = 0; a < active_set.size(); a++){
+        is_active(active_set[a].first, active_set[a].second) = 1;
+      }
       for(int j = 0; j < p; j++){
         for(int k = 0; k < q; k++){
-          if(B(j,k) != 0){
-            new_active_set.push_back({j, k});
-            continue;
-          }
-          // Inactive entry: check for violation
+          if(is_active(j,k) == 1) continue;  // skip active entries
+
+          // OLD: if(e1(j,k) == 0){ // check for violations on the in-active set
+
           w_kk = Omega(k,k);
-
-          // OLD: dense loop with e1 check
-          // if(e1(j,k) == 0){
-
           b_old = B(j,k);
           // OLD: z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
           z = sparse_dot(tXR, j, omega_nz, omega_val, k)/w_kk + n*b_old;
@@ -346,15 +349,23 @@ void B_coord_desc(const int n, const int p, const int q, arma::mat& B, arma::mat
             S(k,k) += tXX(j,j) * b_shift * b_shift/n;
             tXR.col(k) += tXX.col(j) * b_shift;
             // New nonzero — add to active set
-            new_active_set.push_back({j, k});
+            active_set.push_back({j, k});
           }
 
-          // OLD: active set update via e1 matrix
-          // if(B(j,k) != 0) e1(j,k) = 1;
-          // else e1(j,k) = 0;
+          // OLD: if(B(j,k) != 0) e1(j,k) = 1;
+          // OLD: else e1(j,k) = 0;
         }
       }
-      active_set = new_active_set;
+      // Remove entries from active set that were thresholded to zero
+      // during the inner loop (keep old nonzeros + new violations)
+      std::vector<std::pair<int,int>> pruned_active_set;
+      pruned_active_set.reserve(active_set.size());
+      for(size_t a = 0; a < active_set.size(); a++){
+        if(B(active_set[a].first, active_set[a].second) != 0){
+          pruned_active_set.push_back(active_set[a]);
+        }
+      }
+      active_set = pruned_active_set;
       if(violations == 0) break;
     }
   }
