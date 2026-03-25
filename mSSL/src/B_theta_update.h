@@ -20,6 +20,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <vector>
+#include <utility>
 #include <RcppArmadillo.h>
 
 #define EPS (double(2.22E-16))
@@ -74,13 +76,29 @@ double objective(int n, int p, int q,arma::mat S, arma::mat B, arma::mat Omega, 
 }
 
 
+// sparse_dot: compute dot product between tXR row j and Omega row k,
+// using only nonzero entries of Omega (stored in omega_nz/omega_val).
+// This avoids O(q) work when Omega row k is sparse.
+inline double sparse_dot(const arma::mat& tXR, int j,
+                         const std::vector<std::vector<int>>& omega_nz,
+                         const std::vector<std::vector<double>>& omega_val,
+                         int k){
+  double result = 0.0;
+  const std::vector<int>& cols = omega_nz[k];
+  const std::vector<double>& vals = omega_val[k];
+  for(size_t idx = 0; idx < cols.size(); idx++){
+    result += tXR(j, cols[idx]) * vals[idx];
+  }
+  return result;
+}
+
 
 void B_coord_desc(const int n, const int p, const int q, arma::mat& B, arma::mat& R, arma::mat& tXR, arma::mat& S, const double theta,
                   const arma::mat Omega, const double eta,const arma::mat X, const arma::mat tXX,
                   const double lambda1, const double lambda0, const double xi1, const double xi0,
                   arma::vec theta_hyper_params, arma::vec eta_hyper_params, const int max_iter, const double eps, const int verbose){
   // make a copy to be safe
-  arma::mat B_init = B; 
+  arma::mat B_init = B;
   arma::mat R_init = R;
   arma::mat tXR_init = tXR;
   arma::mat S_init = S;
@@ -104,159 +122,239 @@ void B_coord_desc(const int n, const int p, const int q, arma::mat& B, arma::mat
   //double obj = 0.0;
   //double old_obj = 0.0;
   //int obj_counter = 0;
-  
-  arma::mat e1(p,q);
-  e1.zeros(); // the active set
+
+  // --- Sparse Omega neighbor list ---
+  // Precompute nonzero structure of each row of Omega so that the inner
+  // dot product (tXR.row(j) * Omega.row(k)) only touches nonzero entries.
+  // When Omega has ~20% fill this gives ~5x speedup on the dot product.
+  std::vector<std::vector<int>>    omega_nz(q);   // nonzero column indices per row
+  std::vector<std::vector<double>> omega_val(q);   // corresponding values
+  for(int k = 0; k < q; k++){
+    for(int l = 0; l < q; l++){
+      if(Omega(k,l) != 0.0){
+        omega_nz[k].push_back(l);
+        omega_val[k].push_back(Omega(k,l));
+      }
+    }
+  }
+
+  // --- Explicit active set as a vector of (j,k) pairs ---
+  // Instead of iterating over all p*q entries and checking e1(j,k),
+  // we maintain a compact list of active (nonzero) indices.
+  // This skips inactive entries entirely in the inner loop.
+  std::vector<std::pair<int,int>> active_set;
+  active_set.reserve(p * q / 4);  // reasonable initial capacity
   for(int j = 0; j < p; j++){
     for(int k = 0; k < q; k++){
-	  if(B(j,k) != 0) e1(j,k) = 1;
-	  }
+      if(B(j,k) != 0) active_set.push_back({j, k});
+    }
   }
-  
+
+  // OLD: dense active set matrix
+  // arma::mat e1(p,q);
+  // e1.zeros(); // the active set
+  // for(int j = 0; j < p; j++){
+  //   for(int k = 0; k < q; k++){
+  //     if(B(j,k) != 0) e1(j,k) = 1;
+  //   }
+  // }
+
   if(lambda1 == lambda0){
     while(iter < max_iter){
+      // --- Inner loop: iterate only over the active set ---
       while(iter < max_iter){
         iter++;
         converged = 1;
-        for(int j = 0; j < p; j++){
-          for(int k = 0; k < q; k++){
-            w_kk = Omega(k,k);
-            if(e1(j,k) == 1){
-              b_old = B(j,k);
-              z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
-              z_sgn = (z > 0) - (z < 0);
-              b_new = 1.0/n * z_sgn * max(abs(z) - lambda1/w_kk, 0.0);
-              B(j,k) = b_new;
-              b_shift = b_old - b_new;
-              R.col(k) += X.col(j) * b_shift;
-              S.row(k) += b_shift * tXR.row(j)/n;
-              S.col(k) += tXR.row(j).t() * b_shift/n;
-              S(k,k) += tXX(j,j) * b_shift * b_shift/n;
-              tXR.col(k) += tXX.col(j) * b_shift;
-              if(abs(b_shift/b_old) > eps) converged = 0;
-            }
-          }
+        for(size_t a = 0; a < active_set.size(); a++){
+          int j = active_set[a].first;
+          int k = active_set[a].second;
+          w_kk = Omega(k,k);
+
+          // OLD: dense loop over all (j,k) with e1 check
+          // for(int j = 0; j < p; j++){
+          //   for(int k = 0; k < q; k++){
+          //     w_kk = Omega(k,k);
+          //     if(e1(j,k) == 1){
+
+          b_old = B(j,k);
+          // Sparse dot product: only multiply nonzero entries of Omega row k
+          // OLD: z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
+          z = sparse_dot(tXR, j, omega_nz, omega_val, k)/w_kk + n*b_old;
+          z_sgn = (z > 0) - (z < 0);
+          b_new = 1.0/n * z_sgn * max(abs(z) - lambda1/w_kk, 0.0);
+          B(j,k) = b_new;
+          b_shift = b_old - b_new;
+          R.col(k) += X.col(j) * b_shift;
+          S.row(k) += b_shift * tXR.row(j)/n;
+          S.col(k) += tXR.row(j).t() * b_shift/n;
+          S(k,k) += tXX(j,j) * b_shift * b_shift/n;
+          tXR.col(k) += tXX.col(j) * b_shift;
+          if(abs(b_shift/b_old) > eps) converged = 0;
         }
         if(converged == 1) break;
       }
+      // --- Violation scan: check inactive entries for new nonzeros ---
       violations = 0;
+      // Rebuild active set from scratch after violation scan
+      std::vector<std::pair<int,int>> new_active_set;
+      new_active_set.reserve(active_set.size() + p);  // expect some growth
       for(int j = 0; j < p; j++){
         for(int k = 0; k < q; k++){
-          w_kk = Omega(k,k);
-          if(e1(j,k) == 0){
-            b_old = B(j,k);
-            z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
-            z_sgn = (z > 0) - (z < 0);
-            b_new = 1.0/n * z_sgn * max(abs(z) - lambda1/w_kk, 0.0);
-            if(b_new != 0){ // violation found!
-             violations++;
-             B(j,k) = b_new;
-             b_shift = b_old - b_new;
-             R.col(k) += X.col(j) * b_shift;
-             S.row(k) += b_shift * tXR.row(j)/n;
-             S.col(k) += tXR.row(j).t() * b_shift/n;
-             S(k,k) += tXX(j,j) * b_shift * b_shift/n;
-             tXR.col(k) += tXX.col(j) * b_shift;
-            }
+          if(B(j,k) != 0){
+            // Already active — keep it
+            new_active_set.push_back({j, k});
+            continue;
           }
-		      if(B(j,k) != 0) e1(j,k) = 1;
-		      else e1(j,k) = 0;
+          // Inactive entry: check for violation
+          w_kk = Omega(k,k);
+
+          // OLD: dense loop with e1 check
+          // if(e1(j,k) == 0){
+
+          b_old = B(j,k);
+          // OLD: z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
+          z = sparse_dot(tXR, j, omega_nz, omega_val, k)/w_kk + n*b_old;
+          z_sgn = (z > 0) - (z < 0);
+          b_new = 1.0/n * z_sgn * max(abs(z) - lambda1/w_kk, 0.0);
+          if(b_new != 0){ // violation found!
+           violations++;
+           B(j,k) = b_new;
+           b_shift = b_old - b_new;
+           R.col(k) += X.col(j) * b_shift;
+           S.row(k) += b_shift * tXR.row(j)/n;
+           S.col(k) += tXR.row(j).t() * b_shift/n;
+           S(k,k) += tXX(j,j) * b_shift * b_shift/n;
+           tXR.col(k) += tXX.col(j) * b_shift;
+           // New nonzero — add to active set
+           new_active_set.push_back({j, k});
+          }
+
+          // OLD: active set update via e1 matrix
+          // if(B(j,k) != 0) e1(j,k) = 1;
+          // else e1(j,k) = 0;
         }
       }
+      active_set = new_active_set;
       if(violations == 0) break;
     }
   } else{
+    // --- Spike-and-slab case (lambda1 != lambda0) ---
     while(iter < max_iter){
-      while(iter < max_iter){ // inner loop over the active set
+      // Inner loop: coordinate descent over active set only
+      while(iter < max_iter){
         iter++;
         converged = 1;
-        for(int j = 0; j < p; j++){
-          for(int k = 0; k < q; k++){
-            w_kk = Omega(k,k);
-            if(e1(j,k) == 1){
-              b_old = B(j,k);
-              z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
-              z_sgn = (z > 0) - (z < 0);
-              // get what we need for the Delta threshold
+        for(size_t a = 0; a < active_set.size(); a++){
+          int j = active_set[a].first;
+          int k = active_set[a].second;
+          w_kk = Omega(k,k);
 
-              pstar0_inv = 1.0 + (1.0 - theta)/theta * lambda0/lambda1;
-              pstar0 = 1.0/pstar0_inv;
-              
-              lambda_star0 = lambda1 * pstar0 + lambda0 * (1.0 - pstar0);
-              pstar = 1.0/(1.0 + (1.0 - theta)/theta * lambda0/lambda1 * exp(-1 * abs(b_old) * (lambda0 - lambda1)));
-              lambda_star = lambda1 * pstar + lambda0 * (1.0 - pstar);
-              // check whether g(0) > 0:
-              g = (lambda_star0 - lambda1)*(lambda_star0 - lambda1) - 2.0 * n * w_kk * log(pstar0_inv);
-              if((g > 0) && (lambda0 - lambda1 > sqrt(n)/(2.0 * sqrt(w_kk)))){ // now we can use the upper bound on Delta
-                Delta = sqrt(2*n*log(pstar0_inv)/w_kk) + lambda1/w_kk;
-              } else { // i.e. g(0) < 0, or g(0) > 0 but lambda1 - lambda0 not large enough. set Delta = lambda_star_0
-                Delta = lambda_star0/w_kk;
-              }          
-              // now do refined thresholding
-              if(abs(z) <= Delta){
-                b_new = 0.0;
-              } else{
-                b_new = 1.0/n * z_sgn * max(abs(z) - lambda_star/w_kk, 0.0); 
-              }
+          // OLD: dense loop over all (j,k) with e1 check
+          // for(int j = 0; j < p; j++){
+          //   for(int k = 0; k < q; k++){
+          //     w_kk = Omega(k,k);
+          //     if(e1(j,k) == 1){
 
-              b_shift = b_old - b_new;
-              B(j,k) = b_new;
-              R.col(k) += X.col(j) * b_shift;
-              S.row(k) += b_shift * tXR.row(j)/n;
-              S.col(k) += tXR.row(j).t() * b_shift/n;
-              S(k,k) += tXX(j,j) * b_shift * b_shift/n;
-              tXR.col(k) += tXX.col(j) * b_shift;
-              if(abs(b_shift/b_old) > eps) converged = 0;
-            }
+          b_old = B(j,k);
+          // Sparse dot product: only multiply nonzero entries of Omega row k
+          // OLD: z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
+          z = sparse_dot(tXR, j, omega_nz, omega_val, k)/w_kk + n*b_old;
+          z_sgn = (z > 0) - (z < 0);
+          // get what we need for the Delta threshold
+
+          pstar0_inv = 1.0 + (1.0 - theta)/theta * lambda0/lambda1;
+          pstar0 = 1.0/pstar0_inv;
+
+          lambda_star0 = lambda1 * pstar0 + lambda0 * (1.0 - pstar0);
+          pstar = 1.0/(1.0 + (1.0 - theta)/theta * lambda0/lambda1 * exp(-1 * abs(b_old) * (lambda0 - lambda1)));
+          lambda_star = lambda1 * pstar + lambda0 * (1.0 - pstar);
+          // check whether g(0) > 0:
+          g = (lambda_star0 - lambda1)*(lambda_star0 - lambda1) - 2.0 * n * w_kk * log(pstar0_inv);
+          if((g > 0) && (lambda0 - lambda1 > sqrt(n)/(2.0 * sqrt(w_kk)))){ // now we can use the upper bound on Delta
+            Delta = sqrt(2*n*log(pstar0_inv)/w_kk) + lambda1/w_kk;
+          } else { // i.e. g(0) < 0, or g(0) > 0 but lambda1 - lambda0 not large enough. set Delta = lambda_star_0
+            Delta = lambda_star0/w_kk;
           }
+          // now do refined thresholding
+          if(abs(z) <= Delta){
+            b_new = 0.0;
+          } else{
+            b_new = 1.0/n * z_sgn * max(abs(z) - lambda_star/w_kk, 0.0);
+          }
+
+          b_shift = b_old - b_new;
+          B(j,k) = b_new;
+          R.col(k) += X.col(j) * b_shift;
+          S.row(k) += b_shift * tXR.row(j)/n;
+          S.col(k) += tXR.row(j).t() * b_shift/n;
+          S(k,k) += tXX(j,j) * b_shift * b_shift/n;
+          tXR.col(k) += tXX.col(j) * b_shift;
+          if(abs(b_shift/b_old) > eps) converged = 0;
         } // finished looping over active set
         if(converged == 1) break;
       }// break out of inner loop after converging on active set
+
+      // --- Violation scan: check inactive entries for new nonzeros ---
       violations = 0;
+      // Rebuild active set from scratch after violation scan
+      std::vector<std::pair<int,int>> new_active_set;
+      new_active_set.reserve(active_set.size() + p);
       for(int j = 0; j < p; j++){
         for(int k = 0; k < q; k++){
-          w_kk = Omega(k,k);
-          if(e1(j,k) == 0){ // check for violations on the in-active set
-            b_old = B(j,k);
-            z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
-            z_sgn = (z > 0) - (z < 0);
-              // get what we need for the Delta threshold
-
-            pstar0_inv = 1.0 + (1.0 - theta)/theta * lambda0/lambda1;
-            pstar0 = 1.0/pstar0_inv;
-              
-            lambda_star0 = lambda1 * pstar0 + lambda0 * (1.0 - pstar0);
-            pstar = 1.0/(1.0 + (1.0 - theta)/theta * lambda0/lambda1 * exp(-1 * abs(b_old) * (lambda0 - lambda1)));
-            lambda_star = lambda1 * pstar + lambda0 * (1.0 - pstar);
-              // check whether g(0) > 0:
-            g = (lambda_star0 - lambda1)*(lambda_star0 - lambda1) - 2.0 * n * w_kk * log(pstar0_inv);
-            if((g > 0) && (lambda0 - lambda1 > sqrt(n)/(2.0 * sqrt(w_kk)))){ // now we can use the upper bound on Delta
-              Delta = sqrt(2*n*log(pstar0_inv)/w_kk) + lambda1/w_kk;
-            } else { // i.e. g(0) < 0, or g(0) > 0 but lambda1 - lambda0 not large enough. set Delta = lambda_star_0
-              Delta = lambda_star0/w_kk;
-            }          
-              // now do refined thresholding
-            if(abs(z) <= Delta){
-              b_new = 0.0;
-            } else{
-              b_new = 1.0/n * z_sgn * max(abs(z) - lambda_star/w_kk, 0.0); 
-            }
-            if(b_new != 0){ // found a violation!
-              violations++;
-              B(j,k) = b_new;
-              b_shift = b_old - b_new;
-              R.col(k) += X.col(j) * b_shift;
-              S.row(k) += b_shift * tXR.row(j)/n;
-              S.col(k) += tXR.row(j).t() * b_shift/n;
-              S(k,k) += tXX(j,j) * b_shift * b_shift/n;
-              tXR.col(k) += tXX.col(j) * b_shift;
-            }
+          if(B(j,k) != 0){
+            new_active_set.push_back({j, k});
+            continue;
           }
-          // update the active set at this time
-          if(B(j,k) != 0) e1(j,k) = 1;
-          else e1(j,k) = 0;
+          // Inactive entry: check for violation
+          w_kk = Omega(k,k);
+
+          // OLD: dense loop with e1 check
+          // if(e1(j,k) == 0){
+
+          b_old = B(j,k);
+          // OLD: z = dot(tXR.row(j), Omega.row(k))/w_kk + n*b_old;
+          z = sparse_dot(tXR, j, omega_nz, omega_val, k)/w_kk + n*b_old;
+          z_sgn = (z > 0) - (z < 0);
+            // get what we need for the Delta threshold
+
+          pstar0_inv = 1.0 + (1.0 - theta)/theta * lambda0/lambda1;
+          pstar0 = 1.0/pstar0_inv;
+
+          lambda_star0 = lambda1 * pstar0 + lambda0 * (1.0 - pstar0);
+          pstar = 1.0/(1.0 + (1.0 - theta)/theta * lambda0/lambda1 * exp(-1 * abs(b_old) * (lambda0 - lambda1)));
+          lambda_star = lambda1 * pstar + lambda0 * (1.0 - pstar);
+            // check whether g(0) > 0:
+          g = (lambda_star0 - lambda1)*(lambda_star0 - lambda1) - 2.0 * n * w_kk * log(pstar0_inv);
+          if((g > 0) && (lambda0 - lambda1 > sqrt(n)/(2.0 * sqrt(w_kk)))){ // now we can use the upper bound on Delta
+            Delta = sqrt(2*n*log(pstar0_inv)/w_kk) + lambda1/w_kk;
+          } else { // i.e. g(0) < 0, or g(0) > 0 but lambda1 - lambda0 not large enough. set Delta = lambda_star_0
+            Delta = lambda_star0/w_kk;
+          }
+            // now do refined thresholding
+          if(abs(z) <= Delta){
+            b_new = 0.0;
+          } else{
+            b_new = 1.0/n * z_sgn * max(abs(z) - lambda_star/w_kk, 0.0);
+          }
+          if(b_new != 0){ // found a violation!
+            violations++;
+            B(j,k) = b_new;
+            b_shift = b_old - b_new;
+            R.col(k) += X.col(j) * b_shift;
+            S.row(k) += b_shift * tXR.row(j)/n;
+            S.col(k) += tXR.row(j).t() * b_shift/n;
+            S(k,k) += tXX(j,j) * b_shift * b_shift/n;
+            tXR.col(k) += tXX.col(j) * b_shift;
+            // New nonzero — add to active set
+            new_active_set.push_back({j, k});
+          }
+
+          // OLD: active set update via e1 matrix
+          // if(B(j,k) != 0) e1(j,k) = 1;
+          // else e1(j,k) = 0;
         }
       }
+      active_set = new_active_set;
       if(violations == 0) break;
     }
   }
