@@ -126,11 +126,6 @@ List mSSL_dpe(arma::mat X,
   double tmp = 0.0; // holds the value of q_star(k,k')
   int omega_non_zero = 0; // counter for number of non-zero off-diagonal entries in Omega
   
-  // Initialize stuff for QUIC
-  cube res_quic(q,q,2); // cube to hold value of Omega and Sigma computed in QUIC
-  
-  
-  
   // We need copies of B, Omega, R, tXR, S, theta, and eta that are propogated along the grid
   arma::mat B_left = B;
   arma::mat Omega_left = Omega;
@@ -229,9 +224,7 @@ List mSSL_dpe(arma::mat X,
     eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
     // M Step Update of Omega
     xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-    res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-    Omega = res_quic.slice(0);
-    Sigma = res_quic.slice(1);
+    my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
     
     // check convergence and whether we need to terminate early
     converged = 1;
@@ -336,9 +329,7 @@ List mSSL_dpe(arma::mat X,
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
       // M Step Update of Omega
       xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-      Omega = res_quic.slice(0);
-      Sigma = res_quic.slice(1);
+      my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       
       // check convergence and whether we need to terminate early
       converged = 1;
@@ -445,9 +436,7 @@ List mSSL_dpe(arma::mat X,
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
       // M Step Update of Omega
       xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-      Omega = res_quic.slice(0);
-      Sigma = res_quic.slice(1);
+      my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       
       // check convergence and whether we need to terminate early
       converged = 1;
@@ -626,9 +615,7 @@ List mSSL_dpe(arma::mat X,
         eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
         // M Step Update of Omega
         xi_star /= n; // QUIC works with re-scaled objective and we scale our penalty accordingly
-        res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-        Omega = res_quic.slice(0);
-        Sigma = res_quic.slice(1);
+        my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
         
         // check convergence and whether we need to terminate early
         converged = 1;
@@ -818,9 +805,6 @@ List mSSL_dcpe(arma::mat X,
   double theta_reset = theta;
   double eta_reset = eta;
   
-  //Rcout << "preparing QUIC working parameters" << endl;
-  // initialize stuff for QUIC
-  cube res_quic(q,q,2); // cube to hold values from QUIC. 1st one is for Omega, 2nd is for Sigma
   double* S_ptr = S.memptr();
   double* Xi_ptr = xi_star.memptr();
   
@@ -882,9 +866,7 @@ List mSSL_dcpe(arma::mat X,
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta -2 + q*(q-1)/2);
       // M-step update of Omega
       xi_star /= n; // QUIC needs everything to be scaled
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-      Omega = res_quic.slice(0);
-      Sigma = res_quic.slice(1);
+      my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       // check convergence
       converged = 1;
       omega_non_zero = 0;
@@ -947,9 +929,7 @@ List mSSL_dcpe(arma::mat X,
     eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta -2 + q*(q-1)/2);
     // M-step update of Omega
     xi_star /= n;
-    res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-    Omega = res_quic.slice(0);
-    Sigma = res_quic.slice(1);
+    my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
     
     converged = 1;
     for(int j = 0; j < p; j++){
@@ -1050,10 +1030,6 @@ List gSSL(arma::mat Y,
   double tmp = 0.0; // holds the value of q_star(k,k');
   int omega_non_zero = 0; // counter for number of non-zero off-diagonal elements in Omega
   
-  // Initialize stuff for QUIC
-  cube res_quic(q,q,2);
-  
-  
   // Initialize iterators and counters
   int t = 0;
   int iter = 0;
@@ -1094,9 +1070,7 @@ List gSSL(arma::mat Y,
       // M Step
       eta = (a_eta - 1 + accu(q_star)/2)/(a_eta + b_eta - 2 + q*(q-1)/2);
       xi_star /= n;
-      res_quic = my_quic(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
-      Omega = res_quic.slice(0);
-      Sigma = res_quic.slice(1);
+      my_quic_inplace(q, S, xi_star, eps, quic_max_iter, Omega, Sigma);
       
       // check convergence
       converged = 1;

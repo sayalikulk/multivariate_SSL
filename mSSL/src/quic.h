@@ -71,7 +71,8 @@ void CoordinateDescentUpdate(
     double &normD, double &diffD) // something related to the direction
 {
     // calculating a
-    double a = Sigma(i, j) * Sigma(i, j);                       // this is the W_ij^2
+    double sigma_ij = Sigma(i, j);
+    double a = sigma_ij * sigma_ij; // this is the W_ij^2
     if (i != j)
     {
         a += Sigma(i, i) * Sigma(j, j); // W_ij^2+W_iiW_jj when it is not diagonal
@@ -80,8 +81,12 @@ void CoordinateDescentUpdate(
     double ainv = 1.0 / a; // multiplication is cheaper than division
 
     // calculating b
-    double b = S(i, j) - Sigma(i, j) +
-               as_scalar(Sigma.row(i) * U.col(j));     // this is from GLASSO
+    double sigmaU = 0.0;
+    for (int k = 0; k < q; k++)
+    {
+        sigmaU += Sigma(i, k) * U(k, j);
+    }
+    double b = S(i, j) - sigma_ij + sigmaU; // this is from GLASSO
                
 
     // calculating c
@@ -125,10 +130,20 @@ void CoordinateDescentUpdate(
     // updating U, Q is not gonna change here
     if (mu != 0.0)
     {
-        U.row(i) += mu * Sigma.row(j);
-        if (i != j)
+        if (i == j)
         {
-            U.row(j) += mu * Sigma.row(i);
+            for (int k = 0; k < q; k++)
+            {
+                U(i, k) += mu * Sigma(j, k);
+            }
+        }
+        else
+        {
+            for (int k = 0; k < q; k++)
+            {
+                U(i, k) += mu * Sigma(j, k);
+                U(j, k) += mu * Sigma(i, k);
+            }
         }
     }
 }
@@ -256,12 +271,12 @@ double projLogDet(int q, const arma::mat &S,
 }
 
 
-cube my_quic(const int &q,
+void my_quic_inplace(const int &q,
 const arma::mat &S, const arma::mat &Rho,
 const double &tol,
 int &max_iter_quic,
-const arma::mat &Omega_init,
-const arma::mat &Sigma_init)
+arma::mat &Omega,
+arma::mat &Sigma)
 {
 	int maxNewtonIter = max_iter_quic;
 	double cdSweepTol = 0.05;
@@ -271,10 +286,14 @@ const arma::mat &Sigma_init)
 	double fXprev = 1e+15;
 	double sigma = 0.001;
 
-	arma::mat Omega = (Omega_init.n_rows == static_cast<uword>(q) &&
-		Omega_init.n_cols == static_cast<uword>(q)) ? Omega_init : arma::eye(q, q);
-	arma::mat Sigma = (Sigma_init.n_rows == static_cast<uword>(q) &&
-		Sigma_init.n_cols == static_cast<uword>(q)) ? Sigma_init : arma::eye(q, q);
+	if (Omega.n_rows != static_cast<uword>(q) || Omega.n_cols != static_cast<uword>(q))
+	{
+		Omega.eye(q, q);
+	}
+	if (Sigma.n_rows != static_cast<uword>(q) || Sigma.n_cols != static_cast<uword>(q))
+	{
+		Sigma.eye(q, q);
+	}
 
 	arma::mat D(q, q, fill::zeros);
 	arma::mat U(q, q, fill::zeros);
@@ -395,7 +414,7 @@ const arma::mat &Sigma_init)
 			}
 		}
 		trgradgD *= 2.0;
-		for (int i = 0, k = 0; i < q; i++, k += q)
+		for (int i = 0, k = 0; i < q; i++, k += (q + 1))
 		{
 			trgradgD += (S(k) - Sigma(k)) * D(k);
 		}
@@ -410,23 +429,20 @@ const arma::mat &Sigma_init)
 		double alpha = 1.0;
 		double l1normXD = 0.0;
 		double fX1prev = 1e+15;
+		bool acceptedLineSearch = false;
 		for (int lineiter = 0; lineiter < max_lineiter; lineiter++)
 		{
 			double l1normX1 = 0.0;
 			double trSX1 = 0.0;
-			//Sigma = Omega;
-			Sigma = Omega + alpha * D; 
-			arma::mat temp = Sigma;
-			
+			U = Omega + alpha * D;
 			
 			for (int i = 0, k = 0; i < q; i++, k += q)
 			{
 				for (int j = 0; j < i; j++)
 				{
 					int ij = k + j;
-					//Sigma[ij] = Omega[ij] + D[ij] * alpha;
-					l1normX1 += fabs(Sigma(ij)) * Rho(ij);
-					trSX1 += Sigma(ij) * S(ij);
+					l1normX1 += fabs(U(ij)) * Rho(ij);
+					trSX1 += U(ij) * S(ij);
 				}
 			}
 			
@@ -434,17 +450,16 @@ const arma::mat &Sigma_init)
 			trSX1 *= 2.0;
 			for (int i = 0, k = 0; i < q; i++, k += (q + 1))
 			{
-				//Sigma[k] = D[k] * alpha + Omega[k];
-				l1normX1 += fabs(Sigma(k)) * Rho(k);
-				trSX1 += Sigma(k) * S(k);
+				l1normX1 += fabs(U(k)) * Rho(k);
+				trSX1 += U(k) * S(k);
 			}
 			
 			//ptrdiff_t info = 0;
 			//ptrdiff_t p0 = q;
+			Sigma = U;
 			if (!chol(Sigma, Sigma))
 			{
 				alpha *= 0.5;
-				Sigma = Omega;
 				continue;
 			}
 
@@ -466,7 +481,8 @@ const arma::mat &Sigma_init)
 				l1normX = l1normX1;
 				logdetX = logdetX1;
 				trSX = trSX1;
-				Omega = temp;
+				Omega = U;
+				acceptedLineSearch = true;
 				break;
 			}
 			if (fX1prev < fX1)
@@ -475,11 +491,16 @@ const arma::mat &Sigma_init)
 				l1normX = l1normX1;
 				logdetX = logdetX1;
 				trSX = trSX1;
-				Omega = temp;
+				Omega = U;
+				acceptedLineSearch = true;
 				break;
 			}
 			fX1prev = fX1;
 			alpha *= 0.5;
+		}
+		if (!acceptedLineSearch)
+		{
+			Sigma = Omega;
 		}
 		
 		
@@ -512,13 +533,23 @@ const arma::mat &Sigma_init)
 	//dGap = gap;
 	//iter = NewtonIter;
 
+}
+
+cube my_quic(const int &q,
+const arma::mat &S, const arma::mat &Rho,
+const double &tol,
+int &max_iter_quic,
+const arma::mat &Omega_init,
+const arma::mat &Sigma_init)
+{
+	arma::mat Omega = Omega_init;
+	arma::mat Sigma = Sigma_init;
+	my_quic_inplace(q, S, Rho, tol, max_iter_quic, Omega, Sigma);
+
 	cube results(q, q, 2);
 	results.slice(0) = Omega;
 	results.slice(1) = Sigma;
 	return results;
-
-	//double elapsedTime = (clock() - timeBegin)/CLOCKS_PER_SEC;
-	//if(cputime != NULL) cputime = elapsedTime;
 }
 
 cube my_quic(const int &q,
