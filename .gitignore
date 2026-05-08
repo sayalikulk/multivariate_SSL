@@ -4,4 +4,12 @@
 .Rhistory
 *.RData
 src/*.o
+mSSL/src/*.o
+mSSL/src/*.so
+
+# Benchmark artifacts (tests/run_benchmark.sh)
+.bench-master/
+tests/lib_base/
+tests/lib_improved/
+tests/results/
 
